@@ -66,10 +66,12 @@ module Tag_Parser : TAG_PARSER = struct
 
   (* work on the tag parser starts here *)
 
-  let rec dup_exist = function
-    | [] -> false
-    | hd::tl -> List.exists ((=) hd) tl || dup_exist tl;;
+let list_string_to_string l =
+  List.fold_left (fun acc x -> acc ^ x) "" l;;
 
+let rec dup_exist = function
+  | [] -> false
+  | hd::tl -> List.exists ((=) hd) tl || dup_exist tl;;
 
   let assert_list_unique lst = match (dup_exist lst) with
     | false -> lst
@@ -274,8 +276,6 @@ module Tag_Parser : TAG_PARSER = struct
     let lambda = tag_parse (Pair(Symbol("lambda"),Pair(lambda_vars, body))) in
     Applic(lambda, applic_vals)
 
-
-
   and macro_let_star args body =
 
     let rec let_star_tag_parse =
@@ -286,8 +286,6 @@ module Tag_Parser : TAG_PARSER = struct
         Applic(LambdaSimple([first_var],(tag_parse(Pair(Symbol("let*"),Pair(rest, body))))), [tag_parse first_val])
       | _-> raise Alon_err_3 in
     let_star_tag_parse
-
-
 
 
   and macro_letrec args body =
@@ -331,18 +329,19 @@ module Tag_Parser : TAG_PARSER = struct
     Applic(LambdaSimple(letrec_vars_as_exp_list, (body_to_expr(sets_list @ [applic_no_vars]))),whatever_list_as_exp)
 
 
-  and macro_QQ = function
+ and macro_QQ = function 
     | Pair(Symbol "unquote",Pair(a,Nil)) -> (tag_parse a)
-    | Pair(Symbol "unquote-splicing", Pair(a,Nil)) -> raise X_syntax_error
+    | Pair(Symbol "unquote-splicing", Pair(a,Nil)) -> (tag_parse a)
     | Pair(Pair (Symbol "unquote-splicing",Pair(sexpr,Nil)),b) ->
-      Applic(Var "append",([tag_parse sexpr;tag_parse (wrap_with_qq b)]))
+        Applic(Var "append",([tag_parse sexpr;(macro_QQ b)]))
     | Pair(Pair (Symbol "unquote", Pair (a, Nil)),b) ->
-      Applic(Var "cons",([tag_parse a;tag_parse (wrap_with_qq b)]))
+        Applic(Var "cons",([tag_parse a;(macro_QQ b)]))
     | Pair(Pair(a,b),c) ->
-      Applic(Var "cons",([tag_parse (wrap_with_qq (Pair(a,b)));tag_parse (wrap_with_qq c)]))
-    | Pair(a,b) ->
-      Applic(Var "cons",([tag_parse (wrap_with_quote a);tag_parse (wrap_with_qq b)]))
+        Applic(Var "cons",([(macro_QQ (Pair(a,b)));(macro_QQ c)]))
+    | Pair(a,b) -> 
+        Applic(Var "cons",([tag_parse (wrap_with_quote a);(macro_QQ b)]))
     | s -> tag_parse (wrap_with_quote s)
+
 
   and macro_and  = function
     | Nil -> tag_parse (Bool true)
@@ -350,33 +349,37 @@ module Tag_Parser : TAG_PARSER = struct
     | Pair(a,b) -> If(tag_parse a,macro_and b,tag_parse (Bool false))
     | _ -> raise X_syntax_error
 
-  and macro_pset sexpr =
-    let rec make_vars_scheme_list = function
-      | Pair(Pair(Symbol(v),_),rest) ->  (tag_parse (Symbol(v))) :: (make_vars_scheme_list rest)
-      | Nil -> [Const(Void)]
-      | _ -> raise X_syntax_error in
-    let rec make_sexprs_scheme_list = function
-      | Pair(Pair(Symbol(v),Pair(sexpr,Nil)),rest) ->  (tag_parse sexpr) :: (make_sexprs_scheme_list rest)
-      | Nil -> [Const(Void)]
-      | _ -> raise X_syntax_error in
-    (* ToDo: check if need to remove last item  *)
-    let vars_scheme_list = lst_without_last (make_vars_scheme_list sexpr) in
-    let sexprs_scheme_list = lst_without_last (make_sexprs_scheme_list sexpr) in
+  and macro_pset sexpr = 
+  let rec make_vars_scheme_list = function
+    | Pair(Pair(Symbol(v),_),rest) ->  (tag_parse (Symbol(v))) :: (make_vars_scheme_list rest)
+    | Nil -> [Const(Void)] 
+    | _ -> raise X_syntax_error in
+  let rec make_sexprs_scheme_list = function
+    | Pair(Pair(Symbol(v),Pair(sexpr,Nil)),rest) ->  (tag_parse sexpr) :: (make_sexprs_scheme_list rest)
+    | Nil -> [Const(Void)] 
+    | _ -> raise X_syntax_error in
+  (* ToDo: check if need to remove last item  *)
+  let vars_scheme_list = lst_without_last (make_vars_scheme_list sexpr) in
+  let sexprs_scheme_list = lst_without_last (make_sexprs_scheme_list sexpr) in
+  let combineAllVarsNames = list_string_to_string (List.map (function | Var(x) -> x | _ -> raise X_syntax_error) vars_scheme_list) in
+  let lambda_arglist = List.map (function | Var(x) -> Var(x ^ (String.make 1 '_')^combineAllVarsNames) | _ -> raise X_syntax_error) vars_scheme_list  in 
+  let lambda_inner_body = 
+    List.map (function (a,b) -> Set(a,b)) (zip vars_scheme_list lambda_arglist) in
 
-    let lambda_arglist = List.map (function | Var(x) -> Var(x ^ String.make 1 '_') | _ -> raise X_syntax_error) vars_scheme_list  in
-    let lambda_inner_body =
-      List.map (function (a,b) -> Set(a,b)) (zip vars_scheme_list lambda_arglist) in
-
-    (* create the expr: (not send it to tag_parse recursively)*)
-    (*reanme expr_i to expr_i_i *)
-    let lambda_arglist_str = List.map (function | Var(x) -> (x ^ String.make 1 '_') | _ -> raise X_syntax_error) vars_scheme_list in
-    let l2 = LambdaSimple(lambda_arglist_str,(body_to_expr lambda_inner_body)) in
-    let l1 = LambdaSimple([],Applic(l2,sexprs_scheme_list)) in
-    let app_pset = Applic(l1,[]) in
-    app_pset;;
-
+  (* let lambda_inner_body = lambda_inner_body @ [(Const(Sexpr(Bool false)))] in *)  
+  (* create the expr: (not send it to tag_parse recursively)*)
+  (*reanme expr_i to expr_i_i *)
+  let lambda_arglist_str = List.map (function | Var(x) -> (x ^ (String.make 1 '_')^combineAllVarsNames) | _ -> raise X_syntax_error) vars_scheme_list in
+  let l2 = LambdaSimple(lambda_arglist_str,(body_to_expr lambda_inner_body)) in
+  let l1 = LambdaSimple([],Applic(l2,sexprs_scheme_list)) in
+  let app_pset = Applic(l1,[]) in
+  app_pset;;
+  (* let if_expr = If(app_pset,Const(Sexpr(Bool false)),Const(Void)) in *)
+  (* if_expr *)
+  
   let tag_parse_expression sexpr =
     tag_parse sexpr;;
+
   (* raise X_not_yet_implemented;; *)
 
   let tag_parse_expressions sexpr =
